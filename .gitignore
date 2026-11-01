@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+pytools/
+
+# службове
+.DS_Store
+node_modules/
+uploads/
+.arena/

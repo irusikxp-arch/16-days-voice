@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>16 днів: Голос, який чути</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%95%AF%EF%B8%8F%3C/text%3E%3C/svg%3E">
+    <script src="vendor/phaser.min.js"></script>
+    <script>window.Phaser || document.write('<script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"><\/script>');</script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0e1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            overflow: hidden;
+        }
+        #game-container {
+            border: 2px solid #ff6b35;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 40px rgba(255, 107, 53, 0.4);
+        }
+        #loading-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #0a0e1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            color: white;
+            text-align: center;
+        }
+        #loading-screen h1 { color: #ff6b35; font-size: 36px; margin-bottom: 20px; }
+        .progress-bar {
+            width: 300px; height: 8px;
+            background: #2a3040;
+            border-radius: 4px;
+            margin: 20px auto;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff6b35, #4ecdc4);
+            width: 0%;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading-screen">
+        <div>
+            <h1>16 днів: Голос, який чути</h1>
+            <p>Завантаження гри...</p>
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+            <p id="loading-text">0%</p>
+        </div>
+    </div>
+    <div id="game-container"></div>
+
+    <script>
+    // ============================================
+    // ГРА "16 ДНІВ: ГОЛОС, ЯКИЙ ЧУТИ"
+    // Версія з арт-паком "Cozy Fantasy":
+    //   - 8 мальованих фонів (1024x768)
+    //   - 13 спрайтів персонажів (200x400, прозорий фон)
+    //   - 4 об'єкти-декорації (прозорий фон)
+    // ============================================
+
+    // === МАНІФЕСТ АСЕТІВ ===
+    const BG_KEYS  = ['school_yard', 'classroom', 'home', 'phone_digital', 'mall', 'gym', 'psychologist', 'support_center'];
+    const CHAR_KEYS = ['anya', 'anya_happy', 'oleg', 'marina', 'marina_brave', 'teacher', 'psychologist', 'player',
+                       'maxym', 'olya', 'katya', 'iryna', 'dima'];
+    const OBJ_KEYS = ['phone', 'books', 'bench', 'notice'];
+
+    const ASSETS = [
+        ...BG_KEYS.map(k => ({ key: 'bg_' + k,   path: 'assets/backgrounds/' + k + '.png' })),
+        ...CHAR_KEYS.map(k => ({ key: 'char_' + k, path: 'assets/characters/' + k + '.png' })),
+        ...OBJ_KEYS.map(k => ({ key: 'obj_' + k,  path: 'assets/objects/' + k + '.png' }))
+    ];
+
+    // Висота спрайта персонажа на сцені (px). Текстура 200x400 -> scale 0.85
+    const CHAR_HEIGHT = 340;
+    const CHAR_SCALE = CHAR_HEIGHT / 400;
+
+    // === МАПУВАННЯ РОЛЕЙ НА СПРАЙТИ ===
+    // Роль -> спрайт, або { s: спрайт, tint: тонування, flip: віддзеркалення }.
+    // Епізодичні ролі перевикористовують базові спрайти; анонімні агресори —
+    // навмисно темні силуети (обличчя не важливе, важлива поведінка).
+    const CHAR_SPRITES = {
+        1: { teacher: 'teacher', anya: 'anya', oleg: 'oleg', marina: 'marina' },
+        2: { max: 'maxym', hacker: { s: 'oleg', tint: 0x70708c, flip: true }, friend: 'player' },
+        3: { olya: 'olya', mom: { s: 'psychologist', tint: 0xffd9c4 }, neighbor: { s: 'psychologist', tint: 0xc9d4ff, flip: true } },
+        4: { katya: 'katya', stalker: { s: 'oleg', tint: 0x3a3a4d, flip: true }, support: 'marina_brave' },
+        5: { iryna: 'iryna', stranger: { s: 'oleg', tint: 0x54403a }, guard: { s: 'teacher', tint: 0x9fb4ff } },
+        6: { dima: 'dima', bully: { s: 'oleg', tint: 0x5a4a44, flip: true }, coach: { s: 'teacher', tint: 0xa8e6b0 } },
+        7: { psych: 'psychologist', lawyer: { s: 'teacher', tint: 0xd8d8e0 }, parent: { s: 'teacher', tint: 0xffc9a0, flip: true } },
+        8: { volunteer: { s: 'psychologist', tint: 0xbfe8cc }, hero: 'anya_happy', all: 'marina_brave' }
+    };
+
+    // === СТАН ГРИ ===
+    let gameState = {
+        factsCollected: 0,
+        empathy: 50,
+        completedLevels: [],
+        currentLevel: 0,
+        badges: []
+    };
+
+    // Завантаження прогресу
+    const saved = localStorage.getItem('16days_progress');
+    if (saved) gameState = { ...gameState, ...JSON.parse(saved) };
+
+    function saveProgress() {
+        localStorage.setItem('16days_progress', JSON.stringify(gameState));
+    }
+
+    // === ДІАЛОГИ ДЛЯ ВСІХ РІВНІВ ===
+    const ALL_DIALOGS = {
+        // Рівень 1: Шкільний двір
+        level1: {
+            anya: [
+                { name: 'Аня', text: 'Все нормально... просто жарти...', empathy: -10 },
+                { name: 'Аня', text: 'Вони кажуть, що я дивна. Вже тиждень це триває...', empathy: 20, fact: true }
+            ],
+            oleg: [
+                { name: 'Олег', text: 'Та ми просто жартуємо! Вона занадто серйозна.', empathy: -15 },
+                { name: 'Олег', text: 'Ніхто не постраждав. Чого ви чіпляєтесь?', empathy: -20, fact: true }
+            ],
+            marina: [
+                { name: 'Марина', text: 'Я бачу це вже тиждень... але боялася втрутитися.', empathy: 10, fact: true },
+                { name: 'Марина', text: 'Якщо я скажу — стану наступною.', empathy: -10 }
+            ],
+            teacher: [
+                { name: 'Вчитель', text: 'Діти просто граються.', empathy: -20 },
+                { name: 'Вчитель', text: 'Хочеш поговорити з психологом? Кабінет 204.', empathy: 25 }
+            ]
+        },
+        // Рівень 2: Кібербулінг
+        level2: {
+            max: [
+                { name: 'Максим', text: 'Мене вигнали з групового чату. Знову.', empathy: 15, fact: true },
+                { name: 'Максим', text: 'Вони створили новий чат без мене і сміються.', empathy: 20, fact: true }
+            ],
+            hacker: [
+                { name: 'Анонім', text: 'Ха-ха, хто цей невдаха? 😂', empathy: -20 },
+                { name: 'Анонім', text: 'Він навіть фото своє не може нормально зробити.', empathy: -25, fact: true }
+            ],
+            friend: [
+                { name: 'Друг', text: 'Я бачив це. Треба щось робити...', empathy: 15, fact: true },
+                { name: 'Друг', text: 'Але якщо я втручусь — мене теж виганять.', empathy: -10 }
+            ]
+        },
+        // Рівень 3: Дім
+        level3: {
+            olya: [
+                { name: 'Оля', text: 'Мама знову кричала на тата... Я боялася вийти з кімнати.', empathy: 20, fact: true },
+                { name: 'Оля', text: 'Він каже, що це моя вина — я погано вчуся.', empathy: 25, fact: true }
+            ],
+            mom: [
+                { name: 'Мама', text: 'Не розказуй нікому про те, що вдома. Це сімейна справа.', empathy: -15 },
+                { name: 'Мама', text: 'Все буде добре... я сподіваюсь.', empathy: 10 }
+            ],
+            neighbor: [
+                { name: 'Сусідка', text: 'Я чую крики через стіну. Вже не вперше.', empathy: 15, fact: true },
+                { name: 'Сусідка', text: 'Але це ж не моє діло...', empathy: -10 }
+            ]
+        },
+        // Рівень 4: Онлайн-переслідування
+        level4: {
+            katya: [
+                { name: 'Катя', text: 'Хтось створив фейковий профіль з моїми фото...', empathy: 25, fact: true },
+                { name: 'Катя', text: 'Він пише мені погрози. Я не знаю, що робити.', empathy: 20, fact: true }
+            ],
+            stalker: [
+                { name: 'Переслідувач', text: 'Я знаю, де ти живеш. Бачив тебе сьогодні.', empathy: -30, fact: true },
+                { name: 'Переслідувач', text: 'Чому не відповідаєш? Відповідай!', empathy: -25 }
+            ],
+            support: [
+                { name: 'Подруга', text: 'Зроби скріншоти! Це докази.', empathy: 20, fact: true },
+                { name: 'Подруга', text: 'Треба розповісти дорослим. Це серйозно.', empathy: 15 }
+            ]
+        },
+        // Рівень 5: Торговий центр
+        level5: {
+            iryna: [
+                { name: 'Ірина', text: 'Якийсь хлопець весь час йде за мною...', empathy: 20, fact: true },
+                { name: 'Ірина', text: 'Він торкнувся мене без дозволу. Мені страшно.', empathy: 25, fact: true }
+            ],
+            stranger: [
+                { name: 'Незнайомець', text: 'Привіт, красуне. Чому така серйозна?', empathy: -20 },
+                { name: 'Незнайомець', text: 'Давай обміняємось номерами. Ну бо будь другом.', empathy: -25, fact: true }
+            ],
+            guard: [
+                { name: 'Охоронець', text: 'Є камера спостереження. Можу подивитись запис.', empathy: 20, fact: true },
+                { name: 'Охоронець', text: 'Якщо потрібна допомога — звертайся.', empathy: 15 }
+            ]
+        },
+        // Рівень 6: Спортзал
+        level6: {
+            dima: [
+                { name: 'Діма', text: 'Вони змушують мене робити те, що я не хочу.', empathy: 20, fact: true },
+                { name: 'Діма', text: 'Кажуть, що я "слабак", якщо відмовляюсь.', empathy: 25, fact: true }
+            ],
+            bully: [
+                { name: 'Старший', text: 'Давай, не будь бабою. Зроби це.', empathy: -20 },
+                { name: 'Старший', text: 'Всі так роблять. Це просто жарт.', empathy: -25, fact: true }
+            ],
+            coach: [
+                { name: 'Тренер', text: 'У моїй команді так не роблять. Доповідай.', empathy: 25, fact: true },
+                { name: 'Тренер', text: 'Безпека — перш за все.', empathy: 15 }
+            ]
+        },
+        // Рівень 7: Кабінет психолога
+        level7: {
+            psych: [
+                { name: 'Психолог', text: 'Розкажи, що сталося. Я тут, щоб допомогти.', empathy: 20, fact: true },
+                { name: 'Психолог', text: 'Ти не один/одна. Є люди, які можуть допомогти.', empathy: 20, fact: true }
+            ],
+            lawyer: [
+                { name: 'Юрист', text: 'Законом захищені права дітей. Ось що ти можеш зробити...', empathy: 20, fact: true },
+                { name: 'Юрист', text: 'Звернутися по допомогу — це не ябедництво.', empathy: 15, fact: true }
+            ],
+            parent: [
+                { name: 'Батько', text: 'Дякую, що розповів/ла. Ми разом це вирішимо.', empathy: 25 },
+                { name: 'Батько', text: 'Я пишаюсь твоєю сміливістю.', empathy: 20 }
+            ]
+        },
+        // Рівень 8: Центр допомоги (фінал)
+        level8: {
+            volunteer: [
+                { name: 'Волонтер', text: 'Ласкаво просимо! Тут ти в безпеці.', empathy: 20 },
+                { name: 'Волонтер', text: 'Ось контакти, куди можна звернутися.', empathy: 15, fact: true }
+            ],
+            hero: [
+                { name: 'Аня', text: 'Дякую, що не промовчав/ла. Ти змінив/ла все.', empathy: 30 },
+                { name: 'Максим', text: 'Тепер я знаю — я не один.', empathy: 25 }
+            ],
+            all: [
+                { name: 'Всі герої', text: 'Разом ми сильніші. Насильство зупиняється, коли мовчать.', empathy: 30, fact: true }
+            ]
+        }
+    };
+
+    // === ДАНІ РІВНІВ ===
+    const LEVELS = [
+        { key: 'Scene1', title: 'Шкільний двір', icon: '🏫', theme: 'Булінг', color: 0x2a3040, facts: 3,
+          bg: 'school_yard', decor: [{ o: 'notice', x: 140, y: 662 }, { o: 'bench', x: 880, y: 668 }] },
+        { key: 'Scene2', title: 'Класна кімната', icon: '💻', theme: 'Кібербулінг', color: 0x1a2040, facts: 3,
+          bg: 'classroom', decor: [{ o: 'books', x: 872, y: 656 }] },
+        { key: 'Scene3', title: 'Дім', icon: '🏠', theme: 'Емоційне насильство', color: 0x2a1f1a, facts: 3,
+          bg: 'home', decor: [{ o: 'books', x: 150, y: 660 }] },
+        { key: 'Scene4', title: 'Телефон', icon: '📱', theme: 'Онлайн-переслідування', color: 0x1a1a3e, facts: 3,
+          bg: 'phone_digital', decor: [{ o: 'phone', x: 880, y: 300, s: 2.2, float: true }] },
+        { key: 'Scene5', title: 'Торговий центр', icon: '🏪', theme: 'Домагання', color: 0x2a2a2a, facts: 3,
+          bg: 'mall', decor: [{ o: 'notice', x: 884, y: 642 }] },
+        { key: 'Scene6', title: 'Спортзал', icon: '⚽', theme: 'Фізичний тиск', color: 0x2a2520, facts: 3,
+          bg: 'gym', decor: [{ o: 'bench', x: 872, y: 666 }] },
+        { key: 'Scene7', title: 'Кабінет психолога', icon: '🏛️', theme: 'Звітування', color: 0x1a2a20, facts: 3,
+          bg: 'psychologist', decor: [{ o: 'books', x: 862, y: 652 }] },
+        { key: 'Scene8', title: 'Центр допомоги', icon: '🤝', theme: 'Підтримка', color: 0x1a2a2a, facts: 3,
+          bg: 'support_center', decor: [{ o: 'bench', x: 108, y: 762 }, { o: 'notice', x: 940, y: 750 }] }
+    ];
+
+    // === УТИЛІТИ ===
+    function createDialogBox(scene, name, text, onClose) {
+        if (scene.dialogBox) scene.dialogBox.destroy();
+        if (scene.dialogName) scene.dialogName.destroy();
+        if (scene.dialogText) scene.dialogText.destroy();
+
+        scene.dialogBox = scene.add.rectangle(512, 620, 900, 180, 0x0a0e1a, 0.95);
+        scene.dialogBox.setStrokeStyle(2, 0xff6b35);
+        scene.dialogBox.setDepth(1000);
+
+        scene.dialogName = scene.add.text(70, 550, name, {
+            fontSize: '22px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+        }).setDepth(1001);
+
+        scene.dialogText = scene.add.text(70, 580, text, {
+            fontSize: '18px', color: '#ffffff', fontFamily: 'Arial',
+            wordWrap: { width: 850 }
+        }).setDepth(1001);
+
+        scene.dialogBox.setInteractive({ useHandCursor: true });
+        scene.dialogBox.once('pointerdown', () => {
+            scene.dialogBox.destroy();
+            scene.dialogName.destroy();
+            scene.dialogText.destroy();
+            if (onClose) onClose();
+        });
+    }
+
+    // Діалогова логіка, спільна для спрайтів і фолбеків
+    function attachDialogLogic(scene, target, color, name, dialogKey, levelKey, onFact) {
+        target.on('pointerdown', () => {
+            const dialogs = ALL_DIALOGS[levelKey][dialogKey];
+            if (!dialogs || dialogs.length === 0) {
+                createDialogBox(scene, name, 'Персонаж вже все розповів.');
+                return;
+            }
+            const current = dialogs[0];
+            createDialogBox(scene, current.name, current.text, () => {
+                if (current.empathy) {
+                    gameState.empathy = Math.max(0, Math.min(100, gameState.empathy + current.empathy));
+                    if (scene.empathyText) scene.empathyText.setText(`💚 Емпатія: ${gameState.empathy}%`);
+                }
+                if (current.fact && !current.collected) {
+                    gameState.factsCollected++;
+                    current.collected = true;
+                    if (scene.factsText) scene.factsText.setText(`📋 Факти: ${gameState.factsCollected}/${LEVELS[gameState.currentLevel].facts}`);
+                    if (onFact) onFact();
+                    saveProgress();
+
+                    if (gameState.factsCollected >= LEVELS[gameState.currentLevel].facts) {
+                        scene.time.delayedCall(1500, () => scene.completeLevel());
+                    }
+                }
+            });
+        });
+    }
+
+    // Персонаж-спрайт із тінню, табличкою імені та ховер-ефектом
+    function createCharacterSprite(scene, x, feetY, def, name, dialogKey, levelKey) {
+        const spriteKey = 'char_' + (typeof def === 'string' ? def : def.s);
+
+        const shadow = scene.add.ellipse(x, feetY - 6, 130, 26, 0x000000, 0.30).setDepth(feetY - 2);
+
+        const spr = scene.add.image(x, feetY, spriteKey).setOrigin(0.5, 1).setDepth(feetY - 1);
+        spr.setScale(CHAR_SCALE);
+        if (typeof def === 'object') {
+            if (def.tint) spr.setTint(def.tint);
+            if (def.flip) spr.setFlipX(true);
+        }
+
+        // Табличка імені
+        const label = scene.add.text(x, Math.min(feetY + 10, 736), name, {
+            fontSize: '15px', color: '#ffffff', fontFamily: 'Arial',
+            backgroundColor: 'rgba(10,14,26,0.72)', padding: { x: 8, y: 4 }
+        }).setOrigin(0.5, 0).setDepth(902); // над нижньою UI-смугою
+
+        let badge = null;
+        spr.setInteractive({ useHandCursor: true });
+        label.setInteractive({ useHandCursor: true });
+
+        const hoverIn = () => {
+            scene.tweens.add({ targets: spr, scaleX: spr.scaleX * 1.045, scaleY: spr.scaleY * 1.045, duration: 120 });
+            spr.setDepth(900); label.setDepth(902); shadow.setDepth(899);
+        };
+        const hoverOut = () => {
+            spr.setScale(CHAR_SCALE);
+            spr.setDepth(feetY - 1); label.setDepth(902); shadow.setDepth(feetY - 2);
+        };
+        spr.on('pointerover', hoverIn); spr.on('pointerout', hoverOut);
+        label.on('pointerover', hoverIn); label.on('pointerout', hoverOut);
+
+        attachDialogLogic(scene, spr, null, name, dialogKey, levelKey, () => {
+            if (badge) return;
+            badge = scene.add.text(x, feetY - CHAR_HEIGHT - 14, '✅', { fontSize: '26px' })
+                .setOrigin(0.5).setDepth(903);
+            scene.tweens.add({ targets: badge, y: feetY - CHAR_HEIGHT - 34, alpha: 0.9, duration: 400 });
+        });
+        // Клік по табличці = клік по персонажу
+        label.on('pointerdown', () => spr.emit('pointerdown'));
+
+        return spr;
+    }
+
+    // Фолбек, якщо спрайт для ролі не описано (старі кольорові фігурки)
+    function createCharacterPlaceholder(scene, x, y, color, name, dialogKey, levelKey) {
+        const body = scene.add.rectangle(x, y, 50, 90, color);
+        const head = scene.add.circle(x, y - 60, 25, color);
+        const label = scene.add.text(x - 25, y + 45, name, {
+            fontSize: '14px', color: '#ffffff', fontFamily: 'Arial'
+        });
+        const group = scene.add.container(x, y);
+        group.add([body, head, label]);
+        group.setSize(70, 110);
+        group.setInteractive({ useHandCursor: true });
+        group.on('pointerover', () => body.setFillStyle(Phaser.Display.Color.GetColor(
+            Phaser.Display.Color.GetR(color) + 40,
+            Phaser.Display.Color.GetG(color) + 40,
+            Phaser.Display.Color.GetB(color) + 40
+        )));
+        group.on('pointerout', () => body.setFillStyle(color));
+        attachDialogLogic(scene, group, color, name, dialogKey, levelKey, () => body.setStrokeStyle(3, 0x4ade80));
+        return group;
+    }
+
+    function createCharacter(scene, x, y, color, name, dialogKey, levelKey, groundY) {
+        const levelNum = parseInt(levelKey.replace('level', ''), 10);
+        const def = (CHAR_SPRITES[levelNum] || {})[dialogKey];
+        const feetY = groundY || (y + 190); // y у конфігах рівнів = "центр", переводимо в лінію підлоги
+        if (def && scene.textures.exists('char_' + (typeof def === 'string' ? def : def.s))) {
+            return createCharacterSprite(scene, x, feetY, def, name, dialogKey, levelKey);
+        }
+        return createCharacterPlaceholder(scene, x, y, color, name, dialogKey, levelKey);
+    }
+
+    // === ЗАВАНТАЖУВАЛЬНА СЦЕНА ===
+    class BootScene extends Phaser.Scene {
+        constructor() { super({ key: 'BootScene' }); }
+
+        preload() {
+            const bar = document.getElementById('progress-fill');
+            const txt = document.getElementById('loading-text');
+            this.load.on('progress', p => {
+                bar.style.width = Math.round(p * 100) + '%';
+                txt.textContent = Math.round(p * 100) + '%';
+            });
+            this.load.on('complete', () => {
+                document.getElementById('loading-screen').style.display = 'none';
+            });
+            this.load.on('loaderror', file => console.warn('Не вдалося завантажити:', file.key));
+            ASSETS.forEach(a => this.load.image(a.key, a.path));
+        }
+
+        create() {
+            this.scene.start('MenuScene');
+        }
+    }
+
+    // === ГОЛОВНЕ МЕНЮ ===
+    class MenuScene extends Phaser.Scene {
+        constructor() { super({ key: 'MenuScene' }); }
+
+        create() {
+            // Мальований фон + затемнення для читабельності
+            this.add.image(512, 384, 'bg_school_yard').setDepth(0);
+            this.add.rectangle(512, 384, 1024, 768, 0x0a0e1a, 0.62).setDepth(1);
+
+            // Заголовок
+            this.add.text(512, 52, '16 ДНІВ: ГОЛОС, ЯКИЙ ЧУТИ', {
+                fontSize: '36px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(2);
+
+            this.add.text(512, 88, 'Інтерактивна гра проти насильства', {
+                fontSize: '18px', color: '#4ecdc4', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(2);
+
+            // Статистика
+            this.add.text(512, 116,
+                `Пройдено рівнів: ${gameState.completedLevels.length}/8 | Емпатія: ${gameState.empathy}%`, {
+                fontSize: '16px', color: '#ffffff', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(2);
+
+            // Сітка рівнів (4x2)
+            const startX = 180, startY = 228;
+            const gapX = 220, gapY = 235;
+
+            LEVELS.forEach((level, i) => {
+                const col = i % 4;
+                const row = Math.floor(i / 4);
+                const x = startX + col * gapX;
+                const y = startY + row * gapY;
+
+                const isCompleted = gameState.completedLevels.includes(i);
+                const isLocked = i > 0 && !gameState.completedLevels.includes(i - 1);
+
+                // Картка рівня
+                const card = this.add.rectangle(x, y, 180, 200, isLocked ? 0x1a1f2e : level.color, isLocked ? 0.9 : 0.82);
+                card.setStrokeStyle(2, isCompleted ? 0x4ade80 : isLocked ? 0x666666 : 0xff6b35);
+                card.setDepth(2);
+
+                // Іконка
+                this.add.text(x, y - 50, level.icon, {
+                    fontSize: '48px'
+                }).setOrigin(0.5).setDepth(3);
+
+                // Назва
+                this.add.text(x, y, level.title, {
+                    fontSize: '16px', color: '#ffffff', fontFamily: 'Arial', align: 'center'
+                }).setOrigin(0.5).setDepth(3);
+
+                // Тема
+                this.add.text(x, y + 25, level.theme, {
+                    fontSize: '13px', color: '#ff6b35', fontFamily: 'Arial', align: 'center'
+                }).setOrigin(0.5).setDepth(3);
+
+                // Статус
+                if (isCompleted) {
+                    this.add.text(x, y + 55, '✅ Пройдено', {
+                        fontSize: '14px', color: '#4ade80', fontFamily: 'Arial'
+                    }).setOrigin(0.5).setDepth(3);
+                } else if (isLocked) {
+                    this.add.text(x, y + 55, '🔒 Заблоковано', {
+                        fontSize: '14px', color: '#888888', fontFamily: 'Arial'
+                    }).setOrigin(0.5).setDepth(3);
+                } else {
+                    this.add.text(x, y + 55, '▶ Грати', {
+                        fontSize: '14px', color: '#ff6b35', fontFamily: 'Arial'
+                    }).setOrigin(0.5).setDepth(3);
+                }
+
+                // Клік
+                if (!isLocked) {
+                    card.setInteractive({ useHandCursor: true });
+                    card.on('pointerover', () => card.setFillStyle(0x2a3050, 0.95));
+                    card.on('pointerout', () => card.setFillStyle(isLocked ? 0x1a1f2e : level.color, 0.82));
+                    card.on('pointerdown', () => {
+                        gameState.currentLevel = i;
+                        gameState.factsCollected = 0;
+                        // Скидаємо зібрані факти для цього рівня
+                        const levelKey = `level${i + 1}`;
+                        Object.values(ALL_DIALOGS[levelKey]).forEach(arr => {
+                            arr.forEach(d => d.collected = false);
+                        });
+                        saveProgress();
+                        this.scene.start(level.key);
+                    });
+                }
+            });
+
+            // Герої обабіч екрана
+            this.add.image(72, 768, 'char_player').setOrigin(0.5, 1).setScale(0.52).setDepth(2);
+            this.add.image(952, 768, 'char_anya_happy').setOrigin(0.5, 1).setScale(0.52).setDepth(2);
+
+            // Кнопка скидання прогресу
+            const resetBtn = this.add.text(512, 720, '[ Скинути прогрес ]', {
+                fontSize: '16px', color: '#aaaaaa', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+            resetBtn.setInteractive({ useHandCursor: true });
+            resetBtn.on('pointerdown', () => {
+                if (confirm('Скинути весь прогрес?')) {
+                    localStorage.removeItem('16days_progress');
+                    location.reload();
+                }
+            });
+        }
+    }
+
+    // === БАЗОВИЙ КЛАС РІВНЯ ===
+    class BaseLevelScene extends Phaser.Scene {
+        constructor(key) { super({ key }); }
+
+        createLevel(levelIndex, characters, opts = {}) {
+            const level = LEVELS[levelIndex];
+            gameState.currentLevel = levelIndex;
+            const groundY = opts.groundY || null;
+
+            // Мальований фон рівня
+            this.add.image(512, 384, 'bg_' + level.bg).setDepth(0);
+
+            // Декорації-об'єкти
+            (level.decor || []).forEach(d => {
+                const img = this.add.image(d.x, d.y, 'obj_' + d.o).setOrigin(0.5, 1);
+                if (d.s) img.setScale(d.s);
+                img.setDepth(d.y - 3);
+                if (d.float) {
+                    this.tweens.add({ targets: img, y: d.y - 14, duration: 1600, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
+                }
+            });
+
+            // Затемнені смуги під UI для читабельності тексту
+            this.add.rectangle(512, 40, 1024, 80, 0x0a0e1a, 0.55).setDepth(900);
+            this.add.rectangle(512, 748, 1024, 40, 0x0a0e1a, 0.55).setDepth(900);
+
+            // Заголовок
+            this.add.text(30, 30, `${level.icon} Рівень ${levelIndex + 1}: ${level.title}`, {
+                fontSize: '22px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setDepth(901);
+
+            // Кнопка "Меню"
+            const menuBtn = this.add.text(994, 30, '🏠 Меню', {
+                fontSize: '18px', color: '#4ecdc4', fontFamily: 'Arial'
+            }).setOrigin(1, 0).setDepth(901);
+            menuBtn.setInteractive({ useHandCursor: true });
+            menuBtn.on('pointerdown', () => this.scene.start('MenuScene'));
+
+            // UI
+            this.factsText = this.add.text(690, 30, `📋 Факти: 0/${level.facts}`, {
+                fontSize: '18px', color: '#ffffff', fontFamily: 'Arial'
+            }).setOrigin(1, 0).setDepth(901);
+
+            this.empathyText = this.add.text(860, 30, `💚 Емпатія: ${gameState.empathy}%`, {
+                fontSize: '18px', color: '#4ade80', fontFamily: 'Arial'
+            }).setOrigin(1, 0).setDepth(901);
+
+            // Персонажі
+            characters.forEach(char => {
+                createCharacter(this, char.x, char.y, char.color, char.name, char.dialogKey, `level${levelIndex + 1}`, groundY);
+            });
+
+            // Підказка
+            this.add.text(30, 738, '👆 Клікай на персонажів, щоб поговорити. Збери всі факти!', {
+                fontSize: '14px', color: '#cccccc', fontFamily: 'Arial'
+            }).setDepth(901);
+
+            // Вступний діалог
+            this.time.delayedCall(500, () => {
+                createDialogBox(this, '📖 Вступ', level.intro || 'Досліди сцену та поговори з усіма персонажами.');
+            });
+        }
+
+        completeLevel() {
+            if (gameState.completedLevels.includes(gameState.currentLevel)) return;
+
+            gameState.completedLevels.push(gameState.currentLevel);
+            saveProgress();
+
+            const overlay = this.add.rectangle(512, 384, 1024, 768, 0x000000, 0.85).setDepth(1100);
+
+            this.add.text(512, 250, '🏆 Рівень завершено!', {
+                fontSize: '48px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(1101);
+
+            this.add.text(512, 350,
+                `Зібрано фактів: ${gameState.factsCollected}/${LEVELS[gameState.currentLevel].facts}\nРівень емпатії: ${gameState.empathy}%`, {
+                fontSize: '24px', color: '#ffffff', fontFamily: 'Arial', align: 'center'
+            }).setOrigin(0.5).setDepth(1101);
+
+            this.add.text(512, 450, LEVELS[gameState.currentLevel].lesson || '', {
+                fontSize: '18px', color: '#4ecdc4', fontFamily: 'Arial', align: 'center'
+            }).setOrigin(0.5).setDepth(1101);
+
+            if (gameState.currentLevel < 7) {
+                const nextBtn = this.add.text(512, 580, '[ Наступний рівень ]', {
+                    fontSize: '24px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+                }).setOrigin(0.5).setDepth(1101);
+                nextBtn.setInteractive({ useHandCursor: true });
+                nextBtn.on('pointerdown', () => {
+                    gameState.factsCollected = 0;
+                    this.scene.start(LEVELS[gameState.currentLevel + 1].key);
+                });
+            } else {
+                const finalBtn = this.add.text(512, 580, '[ Завершити гру ]', {
+                    fontSize: '24px', color: '#4ade80', fontStyle: 'bold', fontFamily: 'Arial'
+                }).setOrigin(0.5).setDepth(1101);
+                finalBtn.setInteractive({ useHandCursor: true });
+                finalBtn.on('pointerdown', () => this.scene.start('FinalScene'));
+            }
+
+            const menuBtn = this.add.text(512, 650, '[ До меню ]', {
+                fontSize: '18px', color: '#888888', fontFamily: 'Arial'
+            }).setDepth(1101);
+            menuBtn.setInteractive({ useHandCursor: true });
+            menuBtn.on('pointerdown', () => this.scene.start('MenuScene'));
+        }
+    }
+
+    // === РІВЕНЬ 1: ШКІЛЬНИЙ ДВІР ===
+    class Scene1 extends BaseLevelScene {
+        constructor() { super('Scene1'); }
+        create() {
+            LEVELS[0].intro = 'Ранок. Ти бачиш, як група учнів оточила Аню біля входу. Поговори з усіма та збери 3 факти.';
+            LEVELS[0].lesson = '💡 Булінг — це систематичне цькування. Мовчання свідків = згода.';
+            this.createLevel(0, [
+                { x: 250, y: 450, color: 0xe2c84a, name: 'Вчитель', dialogKey: 'teacher' },
+                { x: 400, y: 450, color: 0x4a90e2, name: 'Аня', dialogKey: 'anya' },
+                { x: 550, y: 450, color: 0xe24a4a, name: 'Олег', dialogKey: 'oleg' },
+                { x: 700, y: 450, color: 0x4ae27a, name: 'Марина', dialogKey: 'marina' }
+            ]);
+        }
+    }
+
+    // === РІВЕНЬ 2: КЛАСНА КІМНАТА ===
+    class Scene2 extends BaseLevelScene {
+        constructor() { super('Scene2'); }
+        create() {
+            LEVELS[1].intro = 'Максим сумний. Його вигнали з групового чату. Досліди, що відбувається в онлайн-просторі.';
+            LEVELS[1].lesson = '💡 Кібербулінг залишає цифрові сліди. Зроби скріншоти — це докази.';
+            this.createLevel(1, [
+                { x: 300, y: 450, color: 0x4a90e2, name: 'Максим', dialogKey: 'max' },
+                { x: 512, y: 450, color: 0x666666, name: 'Анонім', dialogKey: 'hacker' },
+                { x: 720, y: 450, color: 0x4ae27a, name: 'Друг', dialogKey: 'friend' }
+            ]);
+        }
+    }
+
+    // === РІВЕНЬ 3: ДІМ ===
+    class Scene3 extends BaseLevelScene {
+        constructor() { super('Scene3'); }
+        create() {
+            LEVELS[2].intro = 'Оля мовчить про те, що відбувається вдома. Але сусідка чує крики. Поговори з усіма.';
+            LEVELS[2].lesson = '💡 Домашнє насильство — не "сімейна справа". Звернутися по допомогу — правильно.';
+            this.createLevel(2, [
+                { x: 300, y: 450, color: 0x4a90e2, name: 'Оля', dialogKey: 'olya' },
+                { x: 512, y: 450, color: 0xe2c84a, name: 'Мама', dialogKey: 'mom' },
+                { x: 720, y: 450, color: 0x4ae27a, name: 'Сусідка', dialogKey: 'neighbor' }
+            ]);
+        }
+    }
+
+    // === РІВЕНЬ 4: ТЕЛЕФОН ===
+    class Scene4 extends BaseLevelScene {
+        constructor() { super('Scene4'); }
+        create() {
+            LEVELS[3].intro = 'Катя отримала погрози від невідомого. Хтось створив фейковий профіль з її фото.';
+            LEVELS[3].lesson = '💡 Онлайн-переслідування — це злочин. Збережи докази і звернись до поліції.';
+            this.createLevel(3, [
+                { x: 300, y: 450, color: 0x4a90e2, name: 'Катя', dialogKey: 'katya' },
+                { x: 512, y: 450, color: 0xe24a4a, name: 'Переслідувач', dialogKey: 'stalker' },
+                { x: 720, y: 450, color: 0x4ae27a, name: 'Подруга', dialogKey: 'support' }
+            ]);
+        }
+    }
+
+    // === РІВЕНЬ 5: ТОРГОВИЙ ЦЕНТР ===
+    class Scene5 extends BaseLevelScene {
+        constructor() { super('Scene5'); }
+        create() {
+            LEVELS[4].intro = 'Ірина помітила, що незнайомець весь час йде за нею в ТЦ. Що робити?';
+            LEVELS[4].lesson = '💡 Домагання — це не "комплімент". Ти маєш право сказати НІ і звернутися до охорони.';
+            this.createLevel(4, [
+                { x: 300, y: 450, color: 0x4a90e2, name: 'Ірина', dialogKey: 'iryna' },
+                { x: 512, y: 450, color: 0xe24a4a, name: 'Незнайомець', dialogKey: 'stranger' },
+                { x: 720, y: 450, color: 0xe2c84a, name: 'Охоронець', dialogKey: 'guard' }
+            ]);
+        }
+    }
+
+    // === РІВЕНЬ 6: СПОРТЗАЛ ===
+    class Scene6 extends BaseLevelScene {
+        constructor() { super('Scene6'); }
+        create() {
+            LEVELS[5].intro = 'Діму змушують робити те, що він не хоче. "Це просто жарт", — кажуть старші.';
+            LEVELS[5].lesson = '💡 "Жарт", від якого боляче — це насильство. Тренер завжди на твоєму боці.';
+            this.createLevel(5, [
+                { x: 300, y: 450, color: 0x4a90e2, name: 'Діма', dialogKey: 'dima' },
+                { x: 512, y: 450, color: 0xe24a4a, name: 'Старший', dialogKey: 'bully' },
+                { x: 720, y: 450, color: 0xe2c84a, name: 'Тренер', dialogKey: 'coach' }
+            ]);
+        }
+    }
+
+    // === РІВЕНЬ 7: КАБІНЕТ ПСИХОЛОГА ===
+    class Scene7 extends BaseLevelScene {
+        constructor() { super('Scene7'); }
+        create() {
+            LEVELS[6].intro = 'Ти прийшов/ла до психолога. Тут безпечно. Розкажи, що сталося.';
+            LEVELS[6].lesson = '💡 Звернутися по допомогу — це сила. Психолог, юрист, батьки — всі готові допомогти.';
+            this.createLevel(6, [
+                { x: 300, y: 450, color: 0x4ae27a, name: 'Психолог', dialogKey: 'psych' },
+                { x: 512, y: 450, color: 0xe2c84a, name: 'Юрист', dialogKey: 'lawyer' },
+                { x: 720, y: 450, color: 0x4a90e2, name: 'Батько', dialogKey: 'parent' }
+            ]);
+        }
+    }
+
+    // === РІВЕНЬ 8: ЦЕНТР ДОПОМОГИ ===
+    class Scene8 extends BaseLevelScene {
+        constructor() { super('Scene8'); }
+        create() {
+            LEVELS[7].intro = 'Фінальний день. Всі герої зібралися в центрі допомоги. Ти змінив/ла їхні долі.';
+            LEVELS[7].lesson = '💡 Кожен може стати свідком-захисником. Твій голос має значення.';
+            this.createLevel(7, [
+                { x: 250, y: 450, color: 0x4ae27a, name: 'Волонтер', dialogKey: 'volunteer' },
+                { x: 512, y: 450, color: 0x4a90e2, name: 'Герої', dialogKey: 'hero' },
+                { x: 770, y: 450, color: 0xff6b35, name: 'Всі разом', dialogKey: 'all' }
+            ], { groundY: 745 });
+        }
+    }
+
+    // === ФІНАЛЬНА СЦЕНА ===
+    class FinalScene extends Phaser.Scene {
+        constructor() { super({ key: 'FinalScene' }); }
+
+        create() {
+            // Фон
+            this.add.image(512, 384, 'bg_support_center').setDepth(0);
+            this.add.rectangle(512, 384, 1024, 768, 0x0a0e1a, 0.72).setDepth(1);
+
+            // Герої обабіч
+            this.add.image(80, 768, 'char_player').setOrigin(0.5, 1).setScale(0.55).setDepth(2);
+            this.add.image(944, 768, 'char_anya_happy').setOrigin(0.5, 1).setScale(0.55).setDepth(2);
+
+            // Заголовок
+            this.add.text(512, 80, '🎉 ГРУ ЗАВЕРШЕНО!', {
+                fontSize: '48px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(512, 140, 'Ти пройшов/ла всі 16 днів', {
+                fontSize: '24px', color: '#4ecdc4', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            // Статистика
+            this.add.rectangle(512, 280, 700, 180, 0x1a1f2e).setDepth(2);
+            this.add.rectangle(512, 280, 700, 180, 0xff6b35).setStrokeStyle(2, 0xff6b35).setDepth(2);
+
+            this.add.text(512, 220, '📊 ТВОЇ РЕЗУЛЬТАТИ', {
+                fontSize: '22px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(300, 260, '✅ Пройдено рівнів:', {
+                fontSize: '20px', color: '#ffffff', fontFamily: 'Arial'
+            }).setDepth(3);
+            this.add.text(700, 260, `${gameState.completedLevels.length}/8`, {
+                fontSize: '24px', color: '#4ade80', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(300, 300, '💚 Рівень емпатії:', {
+                fontSize: '20px', color: '#ffffff', fontFamily: 'Arial'
+            }).setDepth(3);
+            this.add.text(700, 300, `${gameState.empathy}%`, {
+                fontSize: '24px', color: '#4ade80', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(300, 340, '🏆 Отримано бейджів:', {
+                fontSize: '20px', color: '#ffffff', fontFamily: 'Arial'
+            }).setDepth(3);
+            this.add.text(700, 340, `${gameState.badges.length}`, {
+                fontSize: '24px', color: '#4ade80', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            // Повідомлення
+            let message = '';
+            if (gameState.empathy >= 80) message = '🌟 Ти — справжній захисник! Твоя емпатія змінює світ.';
+            else if (gameState.empathy >= 60) message = '💪 Хороший результат! Ти на правильному шляху.';
+            else message = '📚 Продовжуй вчитися. Кожен крок має значення.';
+
+            this.add.text(512, 420, message, {
+                fontSize: '20px', color: '#4ecdc4', fontFamily: 'Arial', align: 'center'
+            }).setOrigin(0.5).setDepth(3);
+
+            // Контакти допомоги
+            this.add.rectangle(512, 560, 700, 150, 0x1a1f2e).setDepth(2);
+            this.add.rectangle(512, 560, 700, 150, 0x4ade80).setStrokeStyle(2, 0x4ade80).setDepth(2);
+
+            this.add.text(512, 495, '📞 КОНТАКТИ ДОПОМОГИ (Україна)', {
+                fontSize: '20px', color: '#4ade80', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(512, 525, 'Дитяча гаряча лінія: 0 800 500 225 (безкоштовно)', {
+                fontSize: '16px', color: '#ffffff', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(512, 550, 'Ла Страда: 0 800 500 335', {
+                fontSize: '16px', color: '#ffffff', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(512, 575, 'Поліція: 102 | Швидка: 103', {
+                fontSize: '16px', color: '#ffffff', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            this.add.text(512, 600, '🌐 lastrada.org.ua', {
+                fontSize: '16px', color: '#4ecdc4', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+
+            // Кнопки
+            const replayBtn = this.add.text(350, 700, '🔄 Пройти знову', {
+                fontSize: '20px', color: '#ff6b35', fontStyle: 'bold', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+            replayBtn.setInteractive({ useHandCursor: true });
+            replayBtn.on('pointerdown', () => {
+                localStorage.removeItem('16days_progress');
+                location.reload();
+            });
+
+            const menuBtn = this.add.text(670, 700, '🏠 До меню', {
+                fontSize: '20px', color: '#4ecdc4', fontFamily: 'Arial'
+            }).setOrigin(0.5).setDepth(3);
+            menuBtn.setInteractive({ useHandCursor: true });
+            menuBtn.on('pointerdown', () => this.scene.start('MenuScene'));
+        }
+    }
+
+    // === ІНІЦІАЛІЗАЦІЯ ГРИ ===
+    const config = {
+        type: Phaser.AUTO,
+        width: 1024,
+        height: 768,
+        parent: 'game-container',
+        backgroundColor: '#0a0e1a',
+        scale: {
+            mode: Phaser.Scale.FIT,
+            autoCenter: Phaser.Scale.CENTER_BOTH
+        },
+        scene: [
+            BootScene,
+            MenuScene,
+            Scene1, Scene2, Scene3, Scene4,
+            Scene5, Scene6, Scene7, Scene8,
+            FinalScene
+        ]
+    };
+
+    const game = new Phaser.Game(config);
+    </script>
+</body>
+</html>
