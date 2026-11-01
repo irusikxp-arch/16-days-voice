@@ -52,6 +52,13 @@ cp -r game-assets/backgrounds game-assets/characters game-assets/objects ../game
 (перевикористання спрайтів із тонуванням для епізодичних ролей; анонімні агресори —
 темні силуети навмисно).
 
+## Як грати онлайн (GitHub Pages)
+
+Репозиторій увімкнено для GitHub Pages (Source: `main` / `/ (root)`):
+коренева `index.html` автоматично перенаправляє у `game/index.html`.
+Адреса гри: `https://<ВАШ_НІК>.github.io/<НАЗВА_РЕПО>/` (для цього репо —
+`https://irusikxp-arch.github.io/16-days-voice/`).
+
 ## Як викласти цей репозиторій на GitHub
 
 Репозиторій уже ініціалізовано й закомічено локально. Залишилось зв'язати з GitHub:
